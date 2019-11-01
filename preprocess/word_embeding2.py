@@ -77,7 +77,7 @@ with open("unim_poem.json") as json_file:
 print(len(sentences))
 with open("gutenberg-poetry-v001.ndjson") as f:
     data = ndjson.load(f)
-    for i in range(100000):
+    for i in range(500000):
         temp = cleanText(data[i]['s'])
         sentences.append(temp)
         words += temp.split()
@@ -101,8 +101,7 @@ line = f.readline().split()
 
 f = open("sentences.txt", "w")
 for i in sentences:
-    for j in i:
-        f.write(j + ' ')
+    f.write(i)
     f.write('\n')
 f.close()
 
@@ -144,16 +143,13 @@ print("Complete make sentences")
 
 batch_size = 32
 total_batch = int(vocab_size / batch_size)
-embedding_size = 300
+embedding_size = 400
 
 tf.reset_default_graph()
 
 
 inputs = tf.placeholder(tf.int32, shape=[batch_size])
 labels = tf.placeholder(tf.int32, shape=[batch_size])
-
-#weight_shape = [vocab_size, embedding_size]
-
 
 def noise_contrastive_loss(embedding_lookup, weight_shape, bias_shape, y):
     with tf.variable_scope("nce"):
@@ -169,15 +165,13 @@ def noise_contrastive_loss(embedding_lookup, weight_shape, bias_shape, y):
 def embedding_layer(x, embedding_shape):
     with tf.variable_scope("embedding"):
         embedding_init = tf.random_uniform(embedding_shape, -1.0, 1.0)
-        embedding_matrix = tf.get_variable("E", initializer=embedding_init)
+        embedding_matrix = tf.get_variable(name="E", initializer=embedding_init)
         return tf.nn.embedding_lookup(embedding_matrix, x), embedding_matrix
 
 
 inputs_emb, inputs_emb_W = embedding_layer(inputs, [vocab_size, embedding_size])
 
 cost = noise_contrastive_loss(inputs_emb, [vocab_size, embedding_size], [vocab_size], labels)
-
-#cost = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=output, labels=labels))
 
 optimizer = tf.train.AdamOptimizer(0.001).minimize(cost)
 
@@ -191,7 +185,7 @@ saver = tf.train.Saver()
 data_point = 0
 avg_loss, it_log, it_save, it_sample = .0, 100, 5000, 1000
 
-for epoch in range(100):
+for epoch in range(200):
     total_cost = 0
     start = time.time()
 
@@ -209,7 +203,7 @@ for epoch in range(100):
     print('Epoch:', '%04d' % (epoch + 1), 'cost =', '{:.6f}'.format(total_cost))
     print(time.time() - start)
 
-save_path = saver.save(session, 'w2v_model')
+save_path = saver.save(session, 'w2v_model.ckpt')
 
 '''
 embeddings = dict()
