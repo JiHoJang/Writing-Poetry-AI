@@ -6,6 +6,7 @@ import numpy as np
 import json
 import time
 import nltk
+import input_ops
 
 
 def initialize_session():
@@ -29,8 +30,7 @@ for x in f:
     sentences.append(x)
 f.close()
 
-
-embedding_size = 300
+embedding_size = 500
 vocab_size = len(word_to_id)
 batch_size = 32
 neg_size = 64
@@ -39,14 +39,16 @@ neg_size = 64
 inputs = tf.placeholder(tf.int32, shape=[batch_size])
 labels = tf.placeholder(tf.int32, shape=[batch_size])
 
+
 def noise_contrastive_loss(embedding_lookup, weight_shape, bias_shape, y):
     with tf.variable_scope("nce"):
-        nce_weight_init = tf.truncated_normal(weight_shape, stddev=1.0/(weight_shape[1])**0.5)
+        nce_weight_init = tf.truncated_normal(weight_shape, stddev=1.0 / (weight_shape[1]) ** 0.5)
         nce_bias_init = tf.zeros(bias_shape)
         nce_W = tf.get_variable("W", initializer=nce_weight_init)
         nce_b = tf.get_variable("b", initializer=nce_bias_init)
 
-        total_loss = tf.nn.nce_loss(weights=nce_W, biases=nce_b, inputs=embedding_lookup, labels=tf.reshape(y, [-1, 1]), num_sampled=neg_size, num_classes=vocab_size)
+        total_loss = tf.nn.nce_loss(weights=nce_W, biases=nce_b, inputs=embedding_lookup, labels=tf.reshape(y, [-1, 1]),
+                                    num_sampled=neg_size, num_classes=vocab_size)
         return tf.reduce_mean(total_loss)
 
 
@@ -62,7 +64,6 @@ embedding_matrix = embedding_layer([vocab_size, embedding_size])
 cost2 = noise_contrastive_loss(embedding_matrix[0:32], [vocab_size, embedding_size], [vocab_size], labels)
 
 optimizer2 = tf.train.AdamOptimizer(0.001).minimize(cost2)
-#####################################################################
 
 saver = tf.train.Saver()
 
@@ -72,11 +73,11 @@ with tf.Session() as sess:
     sess.close()
 
 print("Complete embedding")
+#####################################################################
 
-# for cosine_similarity normalized can be helpful
 
-def cosine_similiarty(x, y):
-    return np.sum(x * y) / (np.sum(x**2)**0.5 * np.sum(y**2)**0.5)
+def cosine_similarty(x, y):
+    return np.sum(x * y) / (np.sum(x ** 2) ** 0.5 * np.sum(y ** 2) ** 0.5)
 
 
 def similar_words(word="good"):
@@ -84,7 +85,7 @@ def similar_words(word="good"):
 
     scores = []
     for i in range(len(emb_w)):
-        cosine_sim = cosine_similiarty(emb_w[i], emb_w[idx])
+        cosine_sim = cosine_similarty(emb_w[i], emb_w[idx])
         scores.append((cosine_sim, i))
     scores = sorted(scores, reverse=True)
 
@@ -97,35 +98,86 @@ def similar_words(word="good"):
     return ret
 
 
+def make_sim():
+    sim_sen = dict()
+    f = open("output2.txt", "r")
+    line = f.readline().split()
+    for i in line:
+        sim_sen[i] = similar_words(i)
+    f.close()
+    return sim_sen
+
+
+similar = make_sim()
+json = json.dumps(similar)
+f = open("sim_words.json", "w")
+f.write(similar)
+f.close()
+print("complete similar words")
+
 n_step = 15
 n_hidden = 128
 n_class = len(word_to_id)
-#n_class = 10000
+num_layers = 3
 
 tf.reset_default_graph()
 
+
+init_scale = 1.0
+
+uniform_initializer = tf.random_uniform_initializer(minval=-init_scale, maxval=init_scale)
+
 enc_input = tf.placeholder(tf.int32, [None, None])
 dec_input = tf.placeholder(tf.int32, [None, None])
-targets = tf.placeholder(tf.int32, [None, None])
-_labels = tf.nn.embedding_lookup(emb_w, targets)
+targets = tf.placeholder(tf.int64, [None, None])
+#_labels = tf.nn.embedding_lookup(emb_w, targets)
 
 with tf.variable_scope('encode'):
     enc_cell = tf.nn.rnn_cell.BasicLSTMCell(n_hidden)
     enc_cell = tf.nn.rnn_cell.DropoutWrapper(enc_cell, output_keep_prob=0.5)
+    enc_cell = tf.nn.rnn_cell.MultiRNNCell([enc_cell] * num_layers)
     enc_emb = tf.nn.embedding_lookup(emb_w, enc_input)
     _, enc_states = tf.nn.dynamic_rnn(enc_cell, enc_emb, dtype=tf.float32)
 
 with tf.variable_scope('decode'):
     dec_cell = tf.nn.rnn_cell.BasicLSTMCell(n_hidden)
     dec_cell = tf.nn.rnn_cell.DropoutWrapper(dec_cell, output_keep_prob=0.5)
+    dec_cell = tf.nn.rnn_cell.MultiRNNCell([dec_cell] * num_layers)
     dec_emb = tf.nn.embedding_lookup(emb_w, dec_input)
     outputs, _ = tf.nn.dynamic_rnn(dec_cell, dec_emb, initial_state=enc_states, dtype=tf.float32)
 
-model = tf.layers.dense(outputs, embedding_size, activation=None)
+#model = tf.layers.dense(outputs, embedding_size, activation=None)
+with tf.variable_scope("logits", reuse=True) as scope:
+    model = tf.contrib.laters.fully_connected(
+        inputs=outputs,
+        num_outputs=vocab_size,
+        activation_fn=None,
+        weights_initializer=uniform_initializer,
+        scope=scope)
+
+targets = tf.reshape(targets, [-1])
+
+'''find mask
+reader = tf.TFRecordReader()
+FLAGS = tf.flags.FLAGS
+input_file_pattern = FLAGS.input_file_pattern
+
+input_queue = input_ops.prefetch_input_data(
+    reader,
+    input_file_pattern,
+    shuffle=True,
+    capacity=640000,
+    num_reader_threads=1)
+
+serialized = input_queue.dequeue_many(batch_size)
+_, decode, _ = input_ops.parse_example_batch(serialized)
 
 
-#cost = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=model, labels=tf.nn.embedding_lookup(emb_w, targets)))
-cost = tf.reduce_mean(tf.losses.mean_squared_error(labels=_labels, predictions=model))
+weights = tf.to_float(tf.reshape(mask, [-1])) # need to define mask
+'''
+
+# cost = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=model, labels=tf.nn.embedding_lookup(emb_w, targets)))
+cost = tf.reduce_sum(tf.losses.sparse_softmax_cross_entropy_with_logits(labels=targets, logits=model))
 optimizer = tf.train.AdamOptimizer(0.001).minimize(cost)
 
 
@@ -145,10 +197,11 @@ def make_batch(seq_data):
             print("Not nouns")
             continue
         else:
-            input = [n for n in similar_words(nouns[0])]
+            #input = [n for n in similar_words(nouns[0])]
+            input = similar[nouns[0]]
             for i in range(n_step - len(seq)):
                 seq.append("<eos>")
-            
+
             seq_output = seq.copy()
             seq_output.insert(0, '<eos>')
             output = [word_to_id[n] for n in seq_output]
@@ -169,6 +222,7 @@ total_batch = int(len(sentences) / batch_size)
 sess2 = initialize_session()
 sess2.run(tf.global_variables_initializer())
 
+saver = tf.train.Saver()
 
 for epoch in range(1):
     start = time.time()
@@ -178,39 +232,45 @@ for epoch in range(1):
     batch_index = 0
 
     for i in range(2):
-        input_batch, output_batch, target_batch = make_batch(sentences[batch_index:batch_index+batch_size])
+        input_batch, output_batch, target_batch = make_batch(sentences[batch_index:batch_index + batch_size])
         batch_index += batch_size
         print('training')
-        _, loss = sess2.run([optimizer, cost], feed_dict={enc_input:input_batch, dec_input:output_batch, targets:target_batch})
+        _, loss = sess2.run([optimizer, cost],
+                            feed_dict={enc_input: input_batch, dec_input: output_batch, targets: target_batch})
         total_loss += loss
 
     print('Epoch:', '%04d', 'cost =', '{:.6f}'.format(total_loss))
     print(time.time() - start)
 
+save_path = saver.save(sess2, 'lstmED.ckpt')
 
 def generation(word='sun'):
     input_batch = [n for n in similar_words(word)]
     output_batch = [word_to_id["<eos>"] for i in range(n_step)]
 
-    result = sess2.run(model, feed_dict={enc_input: [input_batch], dec_input: [output_batch]})
+    prediction = tf.arg_max(model, 2)
+
+    result = sess2.run(prediction, feed_dict={enc_input: input_batch, dec_input: output_batch})
+
+    #result = sess2.run(model, feed_dict={enc_input: [input_batch], dec_input: [output_batch]})
 
     decoded = []
     for i in result[0]:
-
+        '''
         scores = []
         for j in range(len(emb_w)):
-            cosine_sim = cosine_similiarty(emb_w[j], i)
+            cosine_sim = cosine_similarty(emb_w[j], i)
             scores.append((cosine_sim, j))
         scores = sorted(scores, reverse=True)
-
+`       
         wordvec = similar_words(id_to_word[str(scores[0][1])])
         print(wordvec)
         decoded.append(wordvec[0])
-
+        '''
+        decoded.append(id_to_word(str(i)))
     print(decoded)
+
 
 generation()
 
 sess2.close()
-
-
