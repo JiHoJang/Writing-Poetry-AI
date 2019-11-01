@@ -73,6 +73,8 @@ with tf.Session() as sess:
 
 print("Complete embedding")
 
+# for cosine_similarity normalized can be helpful
+
 def cosine_similiarty(x, y):
     return np.sum(x * y) / (np.sum(x**2)**0.5 * np.sum(y**2)**0.5)
 
