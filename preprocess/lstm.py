@@ -1,3 +1,7 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import os
 os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 
@@ -124,7 +128,7 @@ def similar_words(word="good"):
 
 
 n_step = 20
-n_hidden = 500
+n_hidden = 128
 n_class = len(word_to_id)
 num_layers = 3
 
@@ -136,8 +140,9 @@ init_scale = 1.0
 uniform_initializer = tf.random_uniform_initializer(minval=-init_scale, maxval=init_scale)
 
 enc_input = tf.placeholder(tf.int32, [None, None])
-dec_input = tf.placeholder(tf.int32, [None, n_step+1])
-targets = tf.placeholder(tf.int64, [None, n_step+1])
+dec_input = tf.placeholder(tf.int32, [None, None])
+target_mask = tf.placeholder(tf.float32, [None, None])
+targets = tf.placeholder(tf.int64, [None, None])
 
 #_labels = tf.nn.embedding_lookup(emb_w, targets)
 
@@ -148,51 +153,47 @@ with tf.variable_scope('encode'):
     enc_emb = tf.nn.embedding_lookup(emb_w, enc_input)
     _, enc_states = tf.nn.dynamic_rnn(enc_cell, enc_emb, dtype=tf.float32)
 
-with tf.variable_scope('decode'):
+with tf.variable_scope('decode') as scope1:
     dec_cell = tf.nn.rnn_cell.BasicLSTMCell(n_hidden)
     dec_cell = tf.nn.rnn_cell.DropoutWrapper(dec_cell, output_keep_prob=0.5)
     #dec_cell = tf.nn.rnn_cell.MultiRNNCell([dec_cell] * num_layers)
     dec_emb = tf.nn.embedding_lookup(emb_w, dec_input)
-    outputs, dec_state = tf.nn.dynamic_rnn(dec_cell, dec_emb, initial_state=enc_states, dtype=tf.float32)
+    dec_emb_input = tf.pad(
+        dec_emb[:, :-1, :], [[0, 0], [1, 0], [0, 0]], name="input")
+    length = tf.reduce_sum(target_mask, 1, name="length")
+    outputs, dec_state = tf.nn.dynamic_rnn(
+        cell=dec_cell,
+        inputs=dec_emb,
+        initial_state=enc_states,
+        dtype=tf.float32,
+        sequence_length=length,
+        scope=scope1
+    )
+    '''
+    outputs = tf.reshape(outputs, [-1, n_hidden])
+    print(outputs)
+    targets = tf.reshape(targets, [-1])
+    weights = tf.to_float(tf.reshape(target_mask, [-1]))
+    '''
 
-#outputs = tf.reshape(outputs, [-1, n_hidden])
-#model = tf.layers.dense(outputs, embedding_size, activation=None)
-with tf.variable_scope("logits") as scope:
+with tf.variable_scope("logits") as scope2:
     model = tf.contrib.layers.fully_connected(
         inputs=outputs,
         num_outputs=vocab_size,
         activation_fn=None,
         weights_initializer=uniform_initializer,
-        scope=scope)
-
-#targets = tf.reshape(targets, [-1])
-
-'''find mask
-reader = tf.TFRecordReader()
-FLAGS = tf.flags.FLAGS
-input_file_pattern = FLAGS.input_file_pattern
-
-input_queue = input_ops.prefetch_input_data(
-    reader,
-    input_file_pattern,
-    shuffle=True,
-    capacity=640000,
-    num_reader_threads=1)
-
-serialized = input_queue.dequeue_many(batch_size)
-_, decode, _ = input_ops.parse_example_batch(serialized)
-
-
-weights = tf.to_float(tf.reshape(mask, [-1])) # need to define mask
-'''
+        scope=scope2)
 
 # cost = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=model, labels=tf.nn.embedding_lookup(emb_w, targets)))
-cost = tf.reduce_sum(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=targets, logits=model))
-optimizer = tf.train.AdamOptimizer(0.001).minimize(cost)
+cost = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=targets, logits=model)
+loss = tf.reduce_sum(cost * target_mask)
+optimizer = tf.train.AdamOptimizer(0.001).minimize(loss)
 
 
 def make_batch(seq_data):
     input_batch, output_batch, target_batch = [], [], []
+    target_mask = []
+
 
     for seq in seq_data:
         isNoun = lambda pos: pos[:2] == 'NN'
@@ -217,12 +218,18 @@ def make_batch(seq_data):
             seq_target = seq.copy()
             seq_target.append("<eos>")
             target = [word_to_id[n] for n in seq_target]
+            mask = []
+            for i in target:
+                if i == word_to_id["<p>"]:
+                    mask.append(0)
+                else:
+                    mask.append(1)
 
-            input_batch.append(input)
-            output_batch.append(output)
-            target_batch.append(target)
-
-    return input_batch, output_batch, target_batch
+            input_batch.append(np.asarray(input))
+            output_batch.append(np.asarray(output))
+            target_batch.append(np.array(target))
+            target_mask.append(np.array(mask))
+    return input_batch, output_batch, target_batch, target_mask
 
 
 batch_size = 128
@@ -233,28 +240,30 @@ sess2.run(tf.global_variables_initializer())
 
 saver = tf.train.Saver()
 
-for epoch in range(10):
+for epoch in range(50):
+    start = time.time()
 
     total_loss = 0
 
     batch_index = 0
 
-    print(total_batch)
-    for i in range(total_batch):
-        start = time.time()
+    for i in range(1000):
 
-        input_batch, output_batch, target_batch = make_batch(sentences[batch_index:batch_index + batch_size])
+        input_batch, output_batch, target_batch, mask_batch = make_batch(sentences[batch_index:batch_index + batch_size])
         batch_index += batch_size
 
-        _, loss = sess2.run([optimizer, cost],
-                            feed_dict={enc_input: input_batch, dec_input: output_batch, targets: target_batch})
-        total_loss += loss
-        print(time.time() - start)
+        _, cost2 = sess2.run([optimizer, loss],
+                            feed_dict={enc_input: input_batch, dec_input: output_batch, targets: target_batch,
+                                       target_mask: mask_batch})
+        total_loss += cost2
+
+    print(time.time() - start)
 
     print('Epoch:', '%04d', 'cost =', '{:.6f}'.format(total_loss))
 
 save_path = saver.save(sess2, 'lstmED.ckpt')
 
+'''
 def generation(word='sun'):
     #input_batch = [n for n in similar_words(word)]
     input_batch = [word_to_id[word]]
@@ -276,7 +285,6 @@ def generation(word='sun'):
         output_batch.append(result[0, -1])
         print(result)
 
-    '''
     for i in range(n_step):
         prediction = tf.arg_max(model, 2)
 
@@ -296,11 +304,11 @@ def generation(word='sun'):
         print(wordvec)
         decoded.append(wordvec[0])
         decoded.append(id_to_word[str(i)])
-                '''
 
     print(decoded)
 
 
 generation()
+                '''
 
 sess2.close()
