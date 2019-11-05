@@ -127,7 +127,7 @@ def similar_words(word="good"):
     return ret
 
 
-n_step = 20
+n_step = 21
 n_hidden = 128
 n_class = len(word_to_id)
 num_layers = 3
@@ -158,15 +158,14 @@ with tf.variable_scope('decode') as scope1:
     dec_cell = tf.nn.rnn_cell.DropoutWrapper(dec_cell, output_keep_prob=0.5)
     #dec_cell = tf.nn.rnn_cell.MultiRNNCell([dec_cell] * num_layers)
     dec_emb = tf.nn.embedding_lookup(emb_w, dec_input)
-    dec_emb_input = tf.pad(
-        dec_emb[:, :-1, :], [[0, 0], [1, 0], [0, 0]], name="input")
+    #dec_emb_input = tf.pad(dec_emb[:, :-1, :], [[0, 0], [1, 0], [0, 0]], name="input")
     length = tf.reduce_sum(target_mask, 1, name="length")
     outputs, dec_state = tf.nn.dynamic_rnn(
         cell=dec_cell,
         inputs=dec_emb,
         initial_state=enc_states,
         dtype=tf.float32,
-        sequence_length=length,
+        #sequence_length=length,
         scope=scope1
     )
     '''
@@ -186,8 +185,8 @@ with tf.variable_scope("logits") as scope2:
 
 # cost = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=model, labels=tf.nn.embedding_lookup(emb_w, targets)))
 cost = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=targets, logits=model)
-loss = tf.reduce_sum(cost * target_mask)
-optimizer = tf.train.AdamOptimizer(0.001).minimize(loss)
+loss = tf.reduce_sum(cost)
+optimizer = tf.train.AdamOptimizer(0.0008).minimize(loss)
 
 
 def make_batch(seq_data):
@@ -204,7 +203,7 @@ def make_batch(seq_data):
 
         seq = seq.split()
 
-        if len(nouns) == 0 or len(seq) > n_step:
+        if len(nouns) == 0 or len(seq) >= n_step:
             #print("Not nouns")
             continue
         elif nouns[0] in word_to_id:
@@ -216,7 +215,7 @@ def make_batch(seq_data):
             seq_output.insert(0, '<go>')
             output = [word_to_id[n] for n in seq_output]
             seq_target = seq.copy()
-            seq_target.append("<eos>")
+            seq_target.append("<p>")
             target = [word_to_id[n] for n in seq_target]
             mask = []
             for i in target:
@@ -247,7 +246,7 @@ for epoch in range(50):
 
     batch_index = 0
 
-    for i in range(1000):
+    for i in range(2000):
 
         input_batch, output_batch, target_batch, mask_batch = make_batch(sentences[batch_index:batch_index + batch_size])
         batch_index += batch_size
@@ -259,7 +258,7 @@ for epoch in range(50):
 
     print(time.time() - start)
 
-    print('Epoch:', '%04d', 'cost =', '{:.6f}'.format(total_loss))
+    print('Epoch:', '%04d' % epoch, 'cost =', '{:.6f}'.format(total_loss))
 
 save_path = saver.save(sess2, 'lstmED.ckpt')
 

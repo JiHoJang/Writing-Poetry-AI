@@ -8,6 +8,7 @@ import json
 import time
 import gru_cell
 import random
+import copy
 
 
 def initialize_session():
@@ -57,14 +58,16 @@ embedding_matrix = embedding_layer([vocab_size, embedding_size])
 
 cost2 = noise_contrastive_loss(embedding_matrix, [vocab_size, embedding_size], [vocab_size], labels)
 
-optimizer2 = tf.train.AdamOptimizer(0.001).minimize(cost2)
+optimizer2 = tf.train.AdamOptimizer(0.0008).minimize(cost2)
 
 saver = tf.train.Saver()
 
 with tf.Session() as sess:
-    saver.restore(sess, "w2v_model.ckpt")
+    saver.restore(sess, "/ckpt/w2v_model.ckpt")
     emb_w = np.array(embedding_matrix.eval())
     sess.close()
+
+tf.reset_default_graph()
 
 print("Complete embedding")
 #####################################################################
@@ -75,44 +78,57 @@ def make_batch(seq_data):
     encode_batch, pre_batch, pos_batch = [], [], []
     mask, pre_mask, pos_mask = [], [], []
 
-    for seq in seq_data:
-        if len(seq['encode']) > n_step or len(seq['decode_pre']) > n_step or len(seq['decode_pos']) > n_step:
+    for seq2 in seq_data:
+        seq = copy.deepcopy(seq2)
+
+        if len(seq['encode']) >= (n_step-1) or len(seq['decode_pre']) >= (n_step-1) or len(seq['decode_pos']) >= (n_step-1):
+            print("too long!!!")
             continue
 
-        for j in range(n_step - len(seq['encode'])):
-            seq['encode'].append("<p>")
+        try:
 
-        for j in range(n_step - len(seq['decode_pre'])):
-            seq['decode_pre'].append("<p>")
+            for j in range(n_step - len(seq['encode'])):
+                seq['encode'].append("<p>")
 
-        for j in range(n_step - len(seq['decode_pos'])):
-            seq['decode_pos'].append("<p>")
+            #seq['decode_pre'].insert(0, '<go>')
+            for j in range(n_step - len(seq['decode_pre'])):
+                seq['decode_pre'].append("<p>")
 
-        temp = [word_to_id[i] for i in seq['encode']]
-        temp2 = [i != "<p>" for i in seq['encode']]
+            #seq['decode_pos'].insert(0, '<go>')
+            for j in range(n_step - len(seq['decode_pos'])):
+                seq['decode_pos'].append("<p>")
 
-        encode_batch.append(temp)
-        mask.append(temp2)
+            temp1 = [word_to_id[i] for i in seq['encode']]
+            temp2 = [i != "<p>" for i in seq['encode']]
 
-        temp = [word_to_id[i] for i in seq['decode_pre']]
-        temp2 = [i != "<p>" for i in seq['decode_pre']]
+            temp3 = [word_to_id[i] for i in seq['decode_pre']]
+            temp4 = [i != "<p>" for i in seq['decode_pre']]
 
-        pre_batch.append(temp)
-        pre_mask.append(temp2)
+            temp5 = [word_to_id[i] for i in seq['decode_pre']]
+            temp6 = [i != "<p>" for i in seq['decode_pre']]
 
-        temp = [word_to_id[i] for i in seq['decode_pre']]
-        temp2 = [i != "<p>" for i in seq['decode_pre']]
+            encode_batch.append(temp1)
+            mask.append(temp2)
+            pre_batch.append(temp3)
+            pre_mask.append(temp4)
+            pos_batch.append(temp5)
+            pos_mask.append(temp6)
 
-        pos_batch.append(temp)
-        pos_mask.append(temp2)
+        except Exception:
+            pass
 
     return np.asarray(encode_batch), np.asarray(pre_batch), np.asarray(pos_batch), np.asarray(mask), np.asarray(pre_mask), np.asarray(pos_mask)
 
-
+poem_data=[]
 f = open("skip_data.json", 'r')
-poem_data = json.load(f)
+t = json.load(f)
+for x in t:
+    if len(x['encode']) < (n_step-1) and len(x['decode_pre']) < (n_step-1) and len(x['decode_pos']) < (n_step-1):
+
+        poem_data.append(x)
 f.close()
 total_batch = int(len(poem_data) / batch_size)
+print(total_batch)
 
 random.shuffle(poem_data)
 
@@ -244,29 +260,80 @@ global_step = tf.contrib.framework.create_global_step()
 learning_rate = tf.constant(0.0008)
 optimizer = tf.train.AdamOptimizer(learning_rate).minimize(total_loss)
 
+saver2 = tf.train.Saver()
+
 sess2 = initialize_session()
 sess2.run(tf.global_variables_initializer())
 
-for epoch in range(1):
+batch_id, batch_pre_id, batch_pos_id, batch_mask, batch_pre_mask, batch_pos_mask = [], [], [], [], [], []
+
+for epoch in range(50):
     start = time.time()
 
     total_cost = 0
     batch_index = 0
 
-    for i in range(total_batch):
+    index = 0
+
+    for i in range(4000):
+        #print("training %d " % index)
+        index += 1
+
         batch_id, batch_pre_id, batch_pos_id, batch_mask, batch_pre_mask, batch_pos_mask = make_batch(
-            poem_data[batch_index: batch_index + batch_size]
-        )
+            poem_data[batch_index: batch_index + batch_size])
+        batch_index += batch_size
 
         feed_dict = {encode_ids:batch_id, decode_pre_ids:batch_pre_id, decode_post_ids:batch_pos_id,
                      encode_mask:batch_pre_mask, decode_pre_mask:batch_pre_mask, decode_post_mask:batch_pos_mask}
-
+        #if len(batch_id) == batch_size and len(batch_pre_id) == batch_size and len(batch_pos_id) == batch_size and len(batch_mask) == batch_size and len(batch_pre_mask) == batch_size and len(batch_pos_mask) == batch_size:
         _, cost = sess2.run([optimizer, total_loss],
                             feed_dict=feed_dict)
+
         total_cost += cost
 
     print(time.time() - start)
 
-    print('Epoch:', '%04d', 'cost =', '{:.6f}'.format(total_cost))
+    print('Epoch:', '%04d' % epoch, 'cost =', '{:.6f}'.format(total_cost))
 
-save_path = saver.save(sess2, 'skip_thought.ckpt')
+
+save_path = saver2.save(sess2, '/ckpt/skip_thought.ckpt')
+
+
+'''
+def generation(sentence=['the', 'sunny', 'street']):
+    test = dict()
+    test['encode'] = sentence
+    test['decode_pre'] = ["<p>"]
+    test['decode_pos'] = ["<p>"]
+
+    test_encode, test_pre, test_pos, test_mask, test_pre_mask, test_pos_mask = make_batch([test])
+
+    prediction = tf.arg_max(post_logits, 1)
+
+    feed_dict = {encode_ids:test_encode, decode_pre_ids:test_pre, decode_post_ids:test_pos,
+                 encode_mask:test_mask, decode_pre_mask:test_pre_mask, decode_post_mask:test_pos_mask}
+
+    result, thoughts = sess2.run([prediction, thought_vectors], feed_dict=feed_dict)
+
+    #print(test_pos)
+
+    decode = []
+    test_pos[0, 0] = result[0]
+    temp = result[0] == word_to_id["<p>"]
+    test_pos_mask[0, 0] = temp
+    decode.append(id_to_word[str(result[0])])
+    #print(test_pos)
+
+    for i in range(1, n_step):
+        feed_dict = {thought_vectors: thoughts, decode_post_ids:test_pos, decode_post_mask:test_pos_mask}
+        result = sess2.run(prediction, feed_dict=feed_dict)
+        test_pos[0, i] = result[i]
+        temp = result[i] == word_to_id["<p>"]
+        test_pos_mask[0, i] = temp
+        decode.append(id_to_word[str(result[i])])
+        #print(test_pos)
+
+    print(decode)
+generation()
+'''
+

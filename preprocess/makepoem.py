@@ -24,7 +24,6 @@ def cleanText(readData):
     #string.replace('!', " ! ").replace('?', " ? ")
     return string
 
-
 data = []
 
 p = []
@@ -51,11 +50,15 @@ d = []
 
 for i in p:
     # 0 is encode, 1 is prev, 2 is post
-    for j in range(1, len(i['poem'])-1):
+    for j in range(1, len(i['poem'])):
         temp = dict()
         temp['encode'] = i['poem'][j]
         temp['decode_pre'] = i['poem'][j-1]
-        temp['decode_pos'] = i['poem'][j+1]
+        try:
+            temp['decode_pos'] = i['poem'][j+1]
+        except Exception:
+            print('except')
+            temp['decode_pos'] = ["<eos>"]
         d.append(temp)
 
 json2 = json.dumps(d)
