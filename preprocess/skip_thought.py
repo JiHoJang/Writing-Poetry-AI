@@ -77,6 +77,7 @@ n_step = 20
 def make_batch(seq_data):
     encode_batch, pre_batch, pos_batch = [], [], []
     mask, pre_mask, pos_mask = [], [], []
+    target_pre, target_pos = [], []
 
     for seq2 in seq_data:
         seq = copy.deepcopy(seq2)
@@ -91,21 +92,32 @@ def make_batch(seq_data):
                 seq['encode'].append("<p>")
 
             #seq['decode_pre'].insert(0, '<go>')
-            for j in range(n_step - len(seq['decode_pre'])):
+            for j in range(n_step - len(seq['decode_pre'])-1):
                 seq['decode_pre'].append("<p>")
 
             #seq['decode_pos'].insert(0, '<go>')
-            for j in range(n_step - len(seq['decode_pos'])):
+            for j in range(n_step - len(seq['decode_pos'])-1):
                 seq['decode_pos'].append("<p>")
 
             temp1 = [word_to_id[i] for i in seq['encode']]
             temp2 = [i != "<p>" for i in seq['encode']]
 
             temp3 = [word_to_id[i] for i in seq['decode_pre']]
-            temp4 = [i != "<p>" for i in seq['decode_pre']]
+            #temp4 = [i != "<p>" for i in seq['decode_pre']]
 
             temp5 = [word_to_id[i] for i in seq['decode_pre']]
-            temp6 = [i != "<p>" for i in seq['decode_pre']]
+            #temp6 = [i != "<p>" for i in seq['decode_pre']]
+
+            temp7 = copy.deepcopy(temp3)
+            temp8 = copy.deepcopy(temp5)
+            temp3.insert(0, word_to_id['<go>'])
+            temp5.insert(0, word_to_id['<go>'])
+
+            temp7.append(word_to_id['<p>'])
+            temp8.append(word_to_id['<p>'])
+
+            temp4 = [i != word_to_id["<p>"] for i in temp7]
+            temp6 = [i != word_to_id["<p>"] for i in temp8]
 
             encode_batch.append(temp1)
             mask.append(temp2)
@@ -113,11 +125,13 @@ def make_batch(seq_data):
             pre_mask.append(temp4)
             pos_batch.append(temp5)
             pos_mask.append(temp6)
+            target_pre.append(temp7)
+            target_pos.append(temp8)
 
         except Exception:
             pass
 
-    return np.asarray(encode_batch), np.asarray(pre_batch), np.asarray(pos_batch), np.asarray(mask), np.asarray(pre_mask), np.asarray(pos_mask)
+    return np.asarray(encode_batch), np.asarray(pre_batch), np.asarray(pos_batch), np.asarray(mask), np.asarray(pre_mask), np.asarray(pos_mask), np.asarray(target_pre), np.array(target_pos)
 
 poem_data=[]
 f = open("skip_data.json", 'r')
@@ -144,9 +158,12 @@ encode_ids = tf.placeholder(tf.int32, [None, None])
 decode_pre_ids = tf.placeholder(tf.int32, [None, None])
 decode_post_ids = tf.placeholder(tf.int32, [None, None])
 
-encode_mask = tf.placeholder(tf.int32, [None, None])
-decode_pre_mask = tf.placeholder(tf.int32, [None, None])
-decode_post_mask = tf.placeholder(tf.int32, [None, None])
+encode_mask = tf.placeholder(tf.float32, [None, None])
+decode_pre_mask = tf.placeholder(tf.float32, [None, None])
+decode_post_mask = tf.placeholder(tf.float32, [None, None])
+
+prev_targets = tf.placeholder(tf.int32, [None, None])
+post_targets = tf.placeholder(tf.int32, [None, None])
 
 uniform_initializer = tf.random_uniform_initializer(
             minval=-0.1,
@@ -180,20 +197,20 @@ target_cross_entropy_loss_weights = []
 dec_prev_cell = _initialize_gru_cell(encoder_dim)
 with tf.variable_scope("decoder_prev") as scope:
     embedding_prev = tf.nn.embedding_lookup(emb_w, decode_pre_ids)
-    decoder_prev_input = tf.pad(
-        embedding_prev[:, :-1, :], [[0, 0], [1, 0], [0, 0]], name="input")
+    #decoder_prev_input = tf.pad(embedding_prev[:, :-1, :], [[0, 0], [1, 0], [0, 0]], name="input")
     length = tf.reduce_sum(decode_pre_mask, 1, name="length")
     decoder_prev_output, _ = tf.nn.dynamic_rnn(
         cell=dec_prev_cell,
-        inputs=decoder_prev_input,
-        sequence_length=length,
+        inputs=embedding_prev,
+        #sequence_length=length,
         initial_state=thought_vectors,
         scope=scope)
-
+    '''
     decoder_prev_output = tf.reshape(decoder_prev_output, [-1, encoder_dim])
     prev_targets = decode_pre_ids
     prev_targets = tf.reshape(prev_targets, [-1])
     prev_weights = tf.to_float(tf.reshape(decode_pre_mask, [-1]))
+    '''
 
     with tf.variable_scope("logits", reuse=False) as scope:
         prev_logits = tf.contrib.layers.fully_connected(
@@ -206,33 +223,32 @@ with tf.variable_scope("decoder_prev") as scope:
     prev_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
         labels=prev_targets, logits=prev_logits)
 
-    batch_prev_loss = tf.reduce_sum(prev_losses * prev_weights)
+    batch_prev_loss = tf.reduce_sum(prev_losses * decode_pre_mask)
     tf.losses.add_loss(batch_prev_loss)
 
     tf.summary.scalar("losses/decode_pre", batch_prev_loss)
 
     target_cross_entropy_losses.append(prev_losses)
-    target_cross_entropy_loss_weights.append(prev_weights)
+    #target_cross_entropy_loss_weights.append(prev_weights)
 
 dec_post_cell = _initialize_gru_cell(encoder_dim)
 
 with tf.variable_scope("decoder_post") as scope:
     embedding_post = tf.nn.embedding_lookup(emb_w, decode_post_ids)
-    decoder_post_input = tf.pad(
-        embedding_post[:, :-1, :], [[0, 0], [1, 0], [0, 0]], name="input")
+    #decoder_post_input = tf.pad(embedding_post[:, :-1, :], [[0, 0], [1, 0], [0, 0]], name="input")
     length = tf.reduce_sum(decode_post_mask, 1, name="length")
     decoder_post_output, _ = tf.nn.dynamic_rnn(
         cell=dec_post_cell,
-        inputs=decoder_post_input,
-        sequence_length=length,
+        inputs=embedding_post,
+        #sequence_length=length,
         initial_state=thought_vectors,
         scope=scope)
-
+    '''
     decoder_post_output = tf.reshape(decoder_post_output, [-1, encoder_dim])
     post_targets = decode_post_ids
     post_targets = tf.reshape(post_targets, [-1])
-    post_weights = tf.to_float(tf.reshape(decode_post_mask, [-1]))
-
+    post_weights = decode_post_mask
+    '''
     with tf.variable_scope("logits", reuse=False) as scope:
         post_logits = tf.contrib.layers.fully_connected(
             inputs=decoder_post_output,
@@ -244,20 +260,20 @@ with tf.variable_scope("decoder_post") as scope:
     post_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
         labels=post_targets, logits=post_logits)
 
-    batch_post_loss = tf.reduce_sum(post_losses * post_weights)
+    batch_post_loss = tf.reduce_sum(post_losses * decode_post_mask)
     tf.losses.add_loss(batch_post_loss)
 
     tf.summary.scalar("losses/decode_post", batch_post_loss)
 
     target_cross_entropy_losses.append(post_losses)
-    target_cross_entropy_loss_weights.append(post_weights)
+    #target_cross_entropy_loss_weights.append(post_weights)
 
 total_loss = tf.losses.get_total_loss()
 tf.summary.scalar("losses/total", total_loss)
 
 global_step = tf.contrib.framework.create_global_step()
 
-learning_rate = tf.constant(0.0008)
+learning_rate = tf.constant(0.001)
 optimizer = tf.train.AdamOptimizer(learning_rate).minimize(total_loss)
 
 saver2 = tf.train.Saver()
@@ -266,8 +282,9 @@ sess2 = initialize_session()
 sess2.run(tf.global_variables_initializer())
 
 batch_id, batch_pre_id, batch_pos_id, batch_mask, batch_pre_mask, batch_pos_mask = [], [], [], [], [], []
+batch_pos, batch_pre = [], []
 
-for epoch in range(50):
+for epoch in range(40):
     start = time.time()
 
     total_cost = 0
@@ -275,16 +292,17 @@ for epoch in range(50):
 
     index = 0
 
-    for i in range(4000):
+    for i in range(1800):
         #print("training %d " % index)
         index += 1
 
-        batch_id, batch_pre_id, batch_pos_id, batch_mask, batch_pre_mask, batch_pos_mask = make_batch(
+        batch_id, batch_pre_id, batch_pos_id, batch_mask, batch_pre_mask, batch_pos_mask, batch_pre, batch_pos = make_batch(
             poem_data[batch_index: batch_index + batch_size])
         batch_index += batch_size
 
         feed_dict = {encode_ids:batch_id, decode_pre_ids:batch_pre_id, decode_post_ids:batch_pos_id,
-                     encode_mask:batch_pre_mask, decode_pre_mask:batch_pre_mask, decode_post_mask:batch_pos_mask}
+                     encode_mask:batch_pre_mask, decode_pre_mask:batch_pre_mask, decode_post_mask:batch_pos_mask,
+                     prev_targets:batch_pre, post_targets:batch_pos}
         #if len(batch_id) == batch_size and len(batch_pre_id) == batch_size and len(batch_pos_id) == batch_size and len(batch_mask) == batch_size and len(batch_pre_mask) == batch_size and len(batch_pos_mask) == batch_size:
         _, cost = sess2.run([optimizer, total_loss],
                             feed_dict=feed_dict)
@@ -306,34 +324,35 @@ def generation(sentence=['the', 'sunny', 'street']):
     test['decode_pre'] = ["<p>"]
     test['decode_pos'] = ["<p>"]
 
-    test_encode, test_pre, test_pos, test_mask, test_pre_mask, test_pos_mask = make_batch([test])
+    test_encode, test_pre, test_pos, test_mask, test_pre_mask, test_pos_mask, _, _ = make_batch([test])
 
-    prediction = tf.arg_max(post_logits, 1)
+    prediction = tf.arg_max(post_logits, 2)
 
     feed_dict = {encode_ids:test_encode, decode_pre_ids:test_pre, decode_post_ids:test_pos,
                  encode_mask:test_mask, decode_pre_mask:test_pre_mask, decode_post_mask:test_pos_mask}
 
     result, thoughts = sess2.run([prediction, thought_vectors], feed_dict=feed_dict)
+    print(result)
 
     #print(test_pos)
 
     decode = []
-    test_pos[0, 0] = result[0]
-    temp = result[0] == word_to_id["<p>"]
+    test_pos[0, 0] = result[0, 0]
+    temp = result[0, 0] != word_to_id["<p>"]
     test_pos_mask[0, 0] = temp
-    decode.append(id_to_word[str(result[0])])
-    #print(test_pos)
+    decode.append(id_to_word[str(result[0, 0])])
 
     for i in range(1, n_step):
         feed_dict = {thought_vectors: thoughts, decode_post_ids:test_pos, decode_post_mask:test_pos_mask}
         result = sess2.run(prediction, feed_dict=feed_dict)
-        test_pos[0, i] = result[i]
-        temp = result[i] == word_to_id["<p>"]
+        test_pos[0, i] = result[0, i]
+        temp = result[0, i] != word_to_id["<p>"]
         test_pos_mask[0, i] = temp
-        decode.append(id_to_word[str(result[i])])
+        decode.append(id_to_word[str(result[0, i])])
         #print(test_pos)
 
     print(decode)
 generation()
-'''
 
+
+'''
